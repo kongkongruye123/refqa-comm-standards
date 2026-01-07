@@ -20,3 +20,20 @@ test/knowledges/llamaindex/cache
 cache/*
 metagpt/*
 test/agents/metagpt/metagpt/*
+
+# --- comm_project (通信标准证据库) ---
+# 原始标准文档（ZIP/PDF/DOC/DOCX），本地使用，禁止提交
+comm_project/data/raw/*.zip
+comm_project/data/raw/*/*.docx
+
+# 训练产物通常较大（LoRA/QLoRA adapter、日志等），默认不提交
+outputs/sft_adapter/
+outputs/dpo_adapter/
+outputs/logs/
+reports/eval_base.json
+reports/eval_sft.json
+reports/eval_dpo.json
+
+# Python 常见缓存（补充，不影响已有规则）
+__pycache__/
+*.py[cod]

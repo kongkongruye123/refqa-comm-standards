@@ -1,0 +1,41 @@
+[
+  {
+    "doc_id": "3GPP TS 23.501",
+    "url": "https://www.3gpp.org/ftp/Specs/archive/23_series/23.501/23501-k00.zip",
+    "zip_filename": "23501-k00.zip",
+    "zip_sha256": "337ba3f6e63aee67fa13de674f8928a8e478092461ddc231395e6c6c253e6113",
+    "extracted_files": [
+      {
+        "name": "23501-k00.docx",
+        "sha256": "a9e61bf3e92669dfdc5dbafd902b77b0c3cf689a1e93f2ee63fa6b2a228f81ae"
+      }
+    ],
+    "downloaded_at": "2026-01-07T10:09:47.448725+00:00"
+  },
+  {
+    "doc_id": "3GPP TS 23.502",
+    "url": "https://www.3gpp.org/ftp/Specs/archive/23_series/23.502/23502-k00.zip",
+    "zip_filename": "23502-k00.zip",
+    "zip_sha256": "2b5ab44f36d769b60a491746923ca372ba8710bab57c112ebed7ceb55ecb1ae4",
+    "extracted_files": [
+      {
+        "name": "23502-k00.docx",
+        "sha256": "e760e472b7d4f1152b91b975133e63f3cb58f23ec24886be43b258f949b53298"
+      }
+    ],
+    "downloaded_at": "2026-01-07T10:09:50.312166+00:00"
+  },
+  {
+    "doc_id": "3GPP TS 24.501",
+    "url": "https://www.3gpp.org/ftp/Specs/archive/24_series/24.501/24501-ic0.zip",
+    "zip_filename": "24501-ic0.zip",
+    "zip_sha256": "c9f167ca5be0e923a4916587a3bc05cd82dd9680d0a4ffff3e964ef9aaa47c2d",
+    "extracted_files": [
+      {
+        "name": "24501-ic0.docx",
+        "sha256": "2e6c023b5d6a2ca339450cee87d3211dff0d70925a121303cce6a52ac8042f01"
+      }
+    ],
+    "downloaded_at": "2026-01-07T10:10:09.110765+00:00"
+  }
+]
