@@ -1,30 +1,25 @@
 # -*- coding: utf-8 -*-
 """comm_project/src/07_train_dpo.py
 
-Day7 Step 8: Train DPO adapter starting from base model + (optionally) SFT adapter.
+Day7 Step 8: Train DPO adapter starting from base model + SFT adapter.
 
-We use TRL's DPOTrainer for simplicity.
+This implementation is compatible with:
+- trl==0.26.x (uses DPOConfig + DPOTrainer(processing_class=...))
 
 Inputs:
 - comm_project/data/dpo/train.jsonl
 - comm_project/data/dpo/eval.jsonl
 
 Outputs:
-- comm_project/outputs/dpo_adapter/
-- comm_project/outputs/logs/dpo_train.log
-
-Expected dataset fields:
-- prompt (str)
-- chosen (str)
-- rejected (str)
+- comm_project/outputs/dpo_adapter*/
 
 Notes
-- This script assumes prompts are already in final text form (system+user+generation marker).
-  That matches 06_make_dpo.py's build_full_prompt.
-- If you want to train directly on chat messages, adapt dataset + formatting accordingly.
+- Uses QLoRA (4bit) when available.
+- Loads SFT adapter and makes it trainable (is_trainable=True) so DPO updates LoRA weights.
 """
 
 import argparse
+import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -51,8 +46,8 @@ def parse_args():
     ap.add_argument("--tb_logdir", default=str(PROJECT_ROOT / "outputs" / "logs" / "tensorboard" / "dpo"))
     ap.add_argument("--run_name", default=None)
 
-    ap.add_argument("--max_length", type=int, default=2048)
-    ap.add_argument("--max_prompt_length", type=int, default=1400)
+    ap.add_argument("--max_length", type=int, default=1024)
+    ap.add_argument("--max_prompt_length", type=int, default=700)
 
     ap.add_argument("--num_train_epochs", type=float, default=1.0)
     ap.add_argument("--per_device_train_batch_size", type=int, default=1)
@@ -61,14 +56,20 @@ def parse_args():
     ap.add_argument("--learning_rate", type=float, default=1e-5)
 
     ap.add_argument("--beta", type=float, default=0.1)
-    ap.add_argument("--save_steps", type=int, default=500)
-    ap.add_argument("--eval_steps", type=int, default=500)
+    ap.add_argument("--save_steps", type=int, default=200)
+    ap.add_argument("--eval_steps", type=int, default=200)
     ap.add_argument("--logging_steps", type=int, default=20)
 
     ap.add_argument("--seed", type=int, default=42)
 
     ap.add_argument("--use_4bit", action="store_true")
     ap.add_argument("--no_4bit", action="store_true")
+
+    ap.add_argument(
+        "--disable_gradient_checkpointing",
+        action="store_true",
+        help="Disable gradient checkpointing to avoid 'inputs have requires_grad=False' warnings.",
+    )
 
     return ap.parse_args()
 
@@ -96,13 +97,12 @@ def main():
     args = parse_args()
 
     from datasets import load_dataset
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-    from transformers import TrainingArguments, set_seed
+    from transformers import AutoModelForCausalLM, AutoTokenizer, set_seed
+
+    # TRL 0.26.x
+    from trl import DPOConfig, DPOTrainer
 
     set_seed(args.seed)
-
-    # TRL imports
-    from trl import DPOTrainer
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -141,16 +141,43 @@ def main():
 
     model = AutoModelForCausalLM.from_pretrained(args.model_name, **model_kwargs)
 
-    # Load SFT adapter weights as starting point
+    # Ensure input embeddings can require grads.
+    # This avoids torch.utils.checkpoint warning: "None of the inputs have requires_grad=True".
+    if hasattr(model, "enable_input_require_grads"):
+        try:
+            model.enable_input_require_grads()
+        except Exception:
+            pass
+
+    if not args.disable_gradient_checkpointing:
+        # Reduce VRAM usage
+        try:
+            model.gradient_checkpointing_enable()
+        except Exception:
+            pass
+
+    # Load SFT adapter and make it trainable
     sft_adapter = args.sft_adapter
     if sft_adapter and str(sft_adapter).lower() != "none":
         from peft import PeftModel
 
-        model = PeftModel.from_pretrained(model, sft_adapter)
+        try:
+            model = PeftModel.from_pretrained(model, sft_adapter, is_trainable=True)
+        except TypeError:
+            model = PeftModel.from_pretrained(model, sft_adapter)
+            # Force trainable LoRA params
+            for n, p in model.named_parameters():
+                if "lora" in n.lower():
+                    p.requires_grad_(True)
+
+    # Sanity check
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total = sum(p.numel() for p in model.parameters())
+    print(f"[INFO] trainable_params={trainable} total_params={total}")
 
     ds = load_dataset("json", data_files={"train": args.train_file, "validation": args.eval_file})
 
-    targs = TrainingArguments(
+    dpo_cfg_kwargs = dict(
         output_dir=str(out_dir),
         num_train_epochs=args.num_train_epochs,
         per_device_train_batch_size=args.per_device_train_batch_size,
@@ -160,7 +187,6 @@ def main():
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
         eval_steps=args.eval_steps,
-        evaluation_strategy="steps",
         save_strategy="steps",
         report_to=["tensorboard"],
         logging_dir=str(tb_logdir),
@@ -168,23 +194,40 @@ def main():
         bf16=(dtype == torch.bfloat16),
         fp16=(dtype == torch.float16),
         remove_unused_columns=False,
-    )
-
-    trainer = DPOTrainer(
-        model=model,
-        args=targs,
         beta=args.beta,
-        train_dataset=ds["train"],
-        eval_dataset=ds["validation"],
-        tokenizer=tokenizer,
         max_length=args.max_length,
         max_prompt_length=args.max_prompt_length,
     )
 
-    trainer.train()
+    try:
+        dpo_args = DPOConfig(**dpo_cfg_kwargs, evaluation_strategy="steps")
+    except TypeError:
+        dpo_args = DPOConfig(**dpo_cfg_kwargs, eval_strategy="steps")
+
+    trainer = DPOTrainer(
+        model=model,
+        ref_model=None,
+        args=dpo_args,
+        train_dataset=ds["train"],
+        eval_dataset=ds["validation"],
+        processing_class=tokenizer,
+    )
+
+    metrics = trainer.train()
 
     trainer.save_model(str(out_dir))
     tokenizer.save_pretrained(str(out_dir))
+
+    # Append a simple log line
+    try:
+        with Path(args.log_file).open("a", encoding="utf-8") as f:
+            f.write("\n" + "=" * 80 + "\n")
+            f.write(f"trained_at={datetime.utcnow().isoformat()}Z\n")
+            f.write(f"run_name={run_name}\n")
+            f.write(f"tensorboard_logdir={tb_logdir}\n")
+            f.write(json.dumps({"train_metrics": getattr(metrics, "metrics", {})}, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
     print(f"[OK] saved dpo adapter to: {out_dir}")
 
